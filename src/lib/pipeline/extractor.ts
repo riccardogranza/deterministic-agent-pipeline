@@ -19,6 +19,21 @@ export interface ExtractionStepOutput {
 
 const MAX_RETRIES = 3;
 
+export function getValueAtPath(obj: unknown, path: (string | number)[]): unknown {
+  let current: unknown = obj;
+  for (const segment of path) {
+    if (current === null || current === undefined || typeof current !== "object") {
+      return undefined;
+    }
+    if (Array.isArray(current) && typeof segment === "number") {
+      current = current[segment];
+    } else {
+      current = (current as Record<string | number, unknown>)[segment];
+    }
+  }
+  return current;
+}
+
 export async function runSelfHealingExtractor(params: {
   category: DocumentCategory;
   rawText: string;
@@ -30,9 +45,10 @@ export async function runSelfHealingExtractor(params: {
   let totalLatencyMs = 0;
   let totalTokens = 0;
   let priorFeedback: string | undefined;
+  let priorCandidateJson: unknown;
   let modelUsed = "qwen2.5:14b";
   let providerMode: "LIVE_OPENAI_COMPATIBLE" | "DETERMINISTIC_FALLBACK_ENGINE" =
-    "DETERMINISTIC_FALLBACK_ENGINE";
+    "LIVE_OPENAI_COMPATIBLE";
 
   const maxTotalAttempts = MAX_RETRIES + 1;
 
@@ -41,6 +57,7 @@ export async function runSelfHealingExtractor(params: {
       category: params.category,
       rawText: params.rawText,
       attempt,
+      priorCandidateJson,
       priorZodErrorFeedback: priorFeedback,
       simulateFaultOnAttempt1: params.simulateFaultOnAttempt1,
     });
@@ -71,17 +88,14 @@ export async function runSelfHealingExtractor(params: {
       };
     }
 
-    const rawRecord =
-      typeof callOut.rawJsonObject === "object" && callOut.rawJsonObject !== null
-        ? (callOut.rawJsonObject as Record<string, unknown>)
-        : {};
+    priorCandidateJson = callOut.rawJsonObject;
 
     const zodErrors = parsed.error.issues.map((issue) => {
       const pathStr = issue.path.join(".") || "<root>";
       return {
         path: pathStr,
         message: issue.message,
-        received: pathStr in rawRecord ? rawRecord[pathStr] : undefined,
+        received: getValueAtPath(callOut.rawJsonObject, issue.path as (string | number)[]),
       };
     });
 
